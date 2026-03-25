@@ -88,7 +88,7 @@ The cosine noise schedule controls how quickly signal is destroyed. The alpha va
 
 The cosine noise schedule defines how much of the original image signal remains at each timestep:
 
-$\bar{\alpha}(t) = \cos^2\!\left(\frac{\frac{t}{T} + s}{1 + s} \cdot \frac{\pi}{2}\right)$
+$\bar{\alpha}(t) = \cos^2\left(\frac{\frac{t}{T} + s}{1 + s} \cdot \frac{\pi}{2}\right)$
 
 Where:
 - $t$ is the current timestep (0 to $T$)
@@ -170,9 +170,51 @@ The network receives three pieces of information joined end-to-end: noise at tim
 
 Their values are concatenated to produce a vector. The network sees all three simultaneously i.e what the noisy image looks like (input image), how noisy it is (from timestep value), and what it should be generating (predicted noise).
 
-The time embedding encodes the timestep using sinusoidal functions at different frequencies. This is similar to positional encoding in transformer architecture. High frequencies distinguish nearby timesteps (t=5 vs t=6). Low frequencies distinguish far-apart ones (t=1 vs t=20).
+The time embedding encodes the timestep using sinusoidal functions at different frequencies. 
+
+
+```python
+def time_embedding(t):
+    emb = []
+    for i in range(TIME_EMB_DIM // 2):  # 8 iterations for dim=16
+        freq = 1.0 / (10.0 ** (i / 8))
+        emb.append(math.sin(t * freq))
+        emb.append(math.cos(t * freq))
+    return emb  # returns 16 floats
+```
+
+The network needs to know how noisy the input is. We encode the timestep $t$ into a 16-dimensional vector using sine and cosine waves at different frequencies. This is similar to positional encoding in transformer architecture. High frequencies distinguish nearby timesteps (t=5 vs t=6). 
+
+For `t=5`, the 16-dimensional time embedding vector looks like:
+
+```
+freq[0] = 1.000:  sin(5.0)=-0.959,  cos(5.0)= 0.284
+freq[1] = 0.316:  sin(1.6)= 0.999,  cos(1.6)=-0.029
+freq[2] = 0.100:  sin(0.5)= 0.479,  cos(0.5)= 0.878
+freq[3] = 0.032:  sin(0.2)= 0.158,  cos(0.2)= 0.987
+freq[4] = 0.010:  sin(0.05)=0.050,  cos(0.05)=0.999
+freq[5] = 0.003:  sin(0.02)=0.016,  cos(0.02)=1.000
+freq[6] = 0.001:  sin(0.005)=0.005, cos(0.005)=1.000
+freq[7] = 0.000:  sin(0.002)=0.002, cos(0.002)=1.000
+```
+
+Result: `[-0.959, 0.284, 0.999, -0.029, 0.479, 0.878, 0.158, 0.987, 0.050, 0.999, 0.016, 1.000, 0.005, 1.000, 0.002, 1.000]`
+
+For `t=6`, the high-frequency components change significantly (sin(6)=−0.279 vs sin(5)=−0.959) while low-frequency components barely change. This is the same idea as **positional encoding** in Transformers.
+
+
+Low frequencies distinguish far-apart ones (t=1 vs t=20).
 
 The label embedding is different. It is a learned 16-dimensional vector per label. This is the "micro version" of the CLIP embeddings used in Stable Diffusion. Instead of encoding "a photo of a cat" into 768 dimensions, we encode "heart" into 16 dimensions.
+
+```python
+'label_emb': matrix(num_labels, LABEL_EMB_DIM, std=0.1)  # 62 × 16 matrix
+```
+
+Each of the 62 labels gets its own 16-dimensional vector, initialized as small random numbers. These are learned during training. Backpropagation adjusts them until each label's embedding captures what makes that pattern unique.
+
+When `label_idx=None` (unconditional), the label embedding is all zeros. network gets no information about what the image should be.
+
 
 The core network is made of three fully connected layers with a skip connection. The skip connection transforms the 96-dimensional input directly to 128 dimensions and adds it to layer 2's output before ReLU. This is similar to the residual connection in microgpt. Parameters are updated using the Adam optimizer with a learning rate that decays linearly from 100% to 10% of the initial value.
 
@@ -223,6 +265,32 @@ python microdiffusion.py
 ```
 
 It is simple. No pip install. No dependencies. ~15 minutes on a modern laptop. The output shows training progress, then unconditional samples, then label-guided samples.
+
+## Quick summary of steps
+
+**Training:**
+1. Take a clean image and its label
+2. Destroy it with a random amount of noise
+3. Ask the network: "what noise did I add?" (sometimes with the label, sometimes without)
+4. Compare its answer to the truth (MSE loss)
+5. Adjust the network and label embeddings to be less wrong
+6. Repeat 1500 times
+
+**Generating (unconditional):**
+1. Start with pure random noise
+2. Ask the network: "what noise is in this?" (no label)
+3. Remove some of that predicted noise
+4. Repeat from $t=T$ down to $t=1$
+5. Result: a random image that looks like the training data
+
+**Generating (conditional with CFG):**
+1. Start with pure random noise
+2. Ask the network twice: once with the label, once without
+3. Amplify the difference (the "direction toward the label")
+4. Remove the guided noise prediction
+5. Repeat from $t=T$ down to $t=1$
+6. Result: an image that matches the requested label
+
 
 ## Comparison
 
