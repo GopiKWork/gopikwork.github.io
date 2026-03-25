@@ -240,6 +240,4 @@ This is a toy example to demonstrate the core building blocks of a diffusion mod
 
 ---
 
-*Originally published on [Medium](https://medium.com/@gopikwork/microdiffusion-image-diffusion-in-300-lines-of-pure-python-3a0a4ca341c4).*
-
 *Thank you for taking the time to read. The views expressed in this article are my own and do not necessarily represent the views of my employer. Reach me at [LinkedIn](https://www.linkedin.com/in/gopinathk/).*
