@@ -1,0 +1,22 @@
+title: Gopi's Blog
+description: Writing about AI, machine learning, and software engineering
+author: Gopinath K
+url: "https://gopikwork.github.io"
+baseurl: ""
+
+theme: minima
+
+permalink: /:year/:month/:day/:title/
+
+header_pages:
+  - about.md
+
+social_links:
+  - platform: linkedin
+    user_url: "https://www.linkedin.com/in/gopinathk/"
+  - platform: github
+    user_url: "https://github.com/gopikwork"
+
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag

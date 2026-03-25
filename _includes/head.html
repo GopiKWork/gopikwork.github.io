@@ -1,0 +1,8 @@
+{% if page.canonical_url %}
+<link rel="canonical" href="{{ page.canonical_url }}" />
+{% else %}
+<link rel="canonical" href="{{ page.url | absolute_url }}" />
+{% endif %}
+<script type="text/javascript" async
+  src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-mml-chtml.min.js">
+</script>
