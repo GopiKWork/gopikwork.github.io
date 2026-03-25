@@ -4,7 +4,7 @@ author: Gopinath K
 url: "https://gopikwork.github.io"
 baseurl: ""
 
-theme: minima
+remote_theme: jekyll/minima
 
 permalink: /:year/:month/:day/:title/
 
