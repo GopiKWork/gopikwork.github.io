@@ -376,6 +376,46 @@ KiroCrew already uses Jev this way. Skill routing is a Choice question: given th
 
 Two ways this could go. The capability folds into general language models as another decoding mode, and `system_one` becomes a parameter on a chat completion. Or System One stays a separate, small, cheap class of model that sits beside the LLM and answers the questions the LLM should not be spending tokens on. On cost alone the second looks more likely: the entire point is that a typed decision is one forward pass of a 4B model with no generation, and folding it into a frontier model gives that up. Either way the interface is the durable part. Typed questions in, calibrated probabilities out, policy in code.
 
+## Update: A Third Open-Weight Option
+
+On 2026-09-30, after this post went up, Strands published `strands-decider-2B-hobson-v19` under Apache 2.0 [10]. It answers the same three primitives, and it is decoder based, but it is the opposite of Decider in exactly the place that matters. Decider keeps the language model head and reads the distribution it assigns to the option letters. This model discards the head: the loader keeps only the backbone, so the model is physically incapable of emitting a token. A separate pointer head supplies the readout. It takes a query from the hidden state at the final token of `<answer>`, a key from the hidden state at the last token of each option's line, and the logit for an option is their scaled dot product divided by a temperature fitted per question type. That head is one LayerNorm over the 2048-wide hidden state and two 2048 to 256 projections, 1,053,184 weights, and the rest of the fine-tune is a rank 16 LoRA on Qwen3.5-2B-Base [11]. 17,872,384 trained parameters out of 1,899,697,472, which is 0.94 percent.
+
+The read takes two steps, in two files of the `strands-decider` package [12]. The first assembles the query and the keys out of one forward pass. `pool_last_token` returns the hidden state at the last real token of the question, which is the `<answer>` marker, and `gather_options` picks out the hidden state at the last token of each option's line:
+
+```python
+# strands_decider/infer.py, _slot_probs_shared_prefix
+pooled = pool_last_token(hidden, full_mask).to(torch.float32)
+options = gather_options(hidden, self._option_idx(rendered, 0))
+raw = self.model.head(pooled, options.to(torch.float32))
+logits = apply_temperature(raw, self._temperatures(kinds))
+log_probs = masked_log_softmax(logits, torch.tensor(n_slots, device=self.device))
+```
+
+The dot product itself is five lines in the head. `decide` is the query, one vector of 2048; `options` is K keys of 2048, one per option; `o @ d` is the K dot products, and the result is K logits:
+
+```python
+# strands_decider/modeling.py, PointerHead
+def forward(self, decide: torch.Tensor, options: torch.Tensor) -> torch.Tensor:
+    """decide [B, d], options [B, K, d] -> logits [B, K]."""
+    d = self.q(self.dropout(self.norm(decide))).unsqueeze(-1)   # [B, dim, 1]
+    o = self.k(self.dropout(self.norm(options)))                # [B, K, dim]
+    return (o @ d).squeeze(-1) * self.scale
+```
+
+The numbers in those two blocks. `self.scale` is `256 ** -0.5`, so 0.0625, the same normalisation a standard attention score gets. `apply_temperature` divides by a value fitted per question type rather than the single constant Decider uses: this checkpoint ships 0.9107 for Noul, 0.7342 for Choice and 1.3278 for Score, against the T = 1.935 quoted earlier in this post. A Choice below 1 sharpens the distribution, which is the opposite correction, and it is fitted on held-out data the same way. `masked_log_softmax` then normalises over the first K entries only, which is how one head serves a 2-option Noul and a 10-level Score without the unused slots taking probability mass.
+
+The geometry is worth making concrete. For a 4-option Choice over a short dealership state, the prompt tokenises to 83 rows of 2048 numbers. The pointer head reads 5 of them: the last token of each option line, and the `<answer>` marker. The other 78 rows exist only so those 5 have something to have attended to.
+
+![The hobson-v19 model: frozen backbone, LoRA, and a pointer head in place of the language model head](/assets/images/jev-experiments/strands-decider-architecture.png)
+
+*Figure 7. How hobson-v19 reads a decision: a frozen Qwen3.5-2B-Base backbone, a rank 16 LoRA, and a pointer head where the language model head used to be*
+
+![Where the LoRA adapters sit, and every dimension from the hidden state to the output probabilities](/assets/images/jev-experiments/strands-decider-lora-and-shapes.png)
+
+*Figure 8. Where the adapters sit in a layer, and every dimension from the hidden state to the output probabilities*
+
+So the two decoders answer the same questions by opposite means. Decider asks the language model which letter it would have written. This model throws away the ability to write and asks instead which option vector points most nearly the same way as the decision vector. The repository linked at the top now runs this model as a fourth example and traces it in a standalone notebook.
+
 ## References
 
 [1] TypeSafe AI. "TypeSafe AI." typesafe.ai, 2026. [https://typesafe.ai/](https://typesafe.ai/)
@@ -395,6 +435,12 @@ Two ways this could go. The capability folds into general language models as ano
 [8] Strands Agents. "Steering." Strands Agents documentation, 2026. [https://strandsagents.com/docs/user-guide/sdk/agents/interventions/steering/](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/steering/)
 
 [9] Strands Agents. "strands.vended_plugins.steering.core.handler." Strands Agents API reference, 2026. [https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.core.handler/](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.core.handler/)
+
+[10] Strands Agents. "StrandsAgents/strands-decider-2B-hobson-v19." Hugging Face, 2026. [https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19](https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19)
+
+[11] Qwen. "Qwen/Qwen3.5-2B-Base." Hugging Face, 2026. [https://huggingface.co/Qwen/Qwen3.5-2B-Base](https://huggingface.co/Qwen/Qwen3.5-2B-Base)
+
+[12] Strands Labs. "strands-decider." GitHub, 2026. [https://github.com/strands-labs/strands-decider](https://github.com/strands-labs/strands-decider)
 
 ---
 
